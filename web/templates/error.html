@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card" style="text-align: center; padding: 40px;">
+    <h1 style="font-size: 48px; color: #e74c3c; margin-bottom: 10px;">{{ status_code }}</h1>
+    <h2>{{ title }}</h2>
+    <p style="color: #7f8c8d; margin-bottom: 20px;">{{ message }}</p>
+    
+    {% if retry_after %}
+    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin-bottom: 20px;">
+        <p style="margin: 0; color: #856404; font-weight: bold;">Try again in:</p>
+        <p id="countdown" style="margin: 10px 0 0 0; font-size: 24px; color: #856404; font-weight: bold;">--:--</p>
+    </div>
+    {% endif %}
+    
+</div>
+
+{% if retry_after %}
+<script>
+    function updateCountdown() {
+        const countdownEl = document.getElementById('countdown');
+        const loginLink = document.getElementById('login-link');
+        let secondsLeft = Number({{ retry_after|default(0) }});
+
+        if (!countdownEl) {
+            return;
+        }
+
+        function setLoginLinkEnabled(enabled) {
+            if (!loginLink) {
+                return;
+            }
+            loginLink.style.pointerEvents = enabled ? 'auto' : 'none';
+            loginLink.style.opacity = enabled ? '1' : '0.5';
+            loginLink.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+        }
+        
+        function tick() {
+            if (secondsLeft < 0) {
+                secondsLeft = 0;
+            }
+
+            const minutes = Math.floor(secondsLeft / 60);
+            const seconds = secondsLeft % 60;
+            countdownEl.textContent = String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+            
+            if (secondsLeft > 0) {
+                setLoginLinkEnabled(false);
+                secondsLeft--;
+                setTimeout(tick, 1000);
+            } else {
+                countdownEl.textContent = 'You can try now';
+                countdownEl.style.color = '#27ae60';
+                setLoginLinkEnabled(true);
+            }
+        }
+        tick();
+    }
+    
+    document.addEventListener('DOMContentLoaded', updateCountdown);
+</script>
+{% endif %}
+{% endblock %}

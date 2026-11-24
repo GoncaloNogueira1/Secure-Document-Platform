@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  <h2>Share Document</h2>
+
+  <form action = "{{ url_for('share_document_post', document_id=doc_id) }}" method = "post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="text" id="uname" name="uname" placeholder="Enter username"><br><br>
+    <button class="share-btn">
+      Share
+    </button>
+  </form>
+  
+
+</div>
+{% endblock %}

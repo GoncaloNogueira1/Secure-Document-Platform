@@ -1,0 +1,21 @@
+# Kibana Configuration for local/dev SIEM environment
+
+server.host: "0.0.0.0"
+server.port: 5601
+
+
+# Do NOT set xpack.security.enabled here in Kibana 9.x
+# xpack.security.enabled: false
+
+# Disable noisy/unused plugins for this local setup
+# xpack.fleet.enabled: false
+
+# Stable encryption keys; must be at least 32 characters
+xpack.security.encryptionKey: "dev-security-key-change-me-32chars-min"
+xpack.encryptedSavedObjects.encryptionKey: "dev-saved-objects-key-change-me-32chars"
+xpack.reporting.encryptionKey: "dev-reporting-key-change-me-32chars-min"
+
+telemetry.optIn: false
+telemetry.allowChangingOptInStatus: false
+
+logging.root.level: warn

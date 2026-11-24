@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card narrow">
+  <h2>Authenticator</h2>
+  <p>User <strong>{{ username }}</strong>. Scan the QR in Google Authenticator (or similar), then <a href="{{ url_for('login') }}">log in</a> with password + 6-digit code.</p>
+  <div style="text-align: center; margin: 1.5rem 0;">
+    <img src="{{ qr_data_url }}" alt="QR" width="220" height="220">
+  </div>
+</section>
+{% endblock %}

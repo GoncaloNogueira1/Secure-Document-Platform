@@ -1,0 +1,16 @@
+title = "SS_PROJ Gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "curl-auth-user"
+
+  [[rules.allowlists]]
+  description = "Allow curl basic auth when password is provided only via runtime env var"
+  condition = "AND"
+  regexTarget = "line"
+  paths = ['''docker-compose\.yml''']
+  regexes = [
+    '''-u\s+elastic:\$\$ELASTIC_PASSWORD'''
+  ]

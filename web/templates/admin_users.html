@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  <h2>Admin - User List</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Username</th>
+        <th>Status</th>
+        <th>Admin</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+
+    <tbody>
+      {% for user in users %}
+      <tr>
+        <td>{{ user[0] }}</td>
+        <td>{{ user[1] }}</td>
+        <td>{{ 'Disabled' if user[2] else 'Active' }}</td>
+        <td>{{ 'Yes' if user[3] else 'No' }}</td>
+
+        <td>
+          {% if not user[3] %}
+            {% if user[2] %}
+              <form action="{{ url_for('enable_user', id=user[0]) }}" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="enable-btn">Enable</button>
+              </form>
+            {% else %}
+              <form action="{{ url_for('disable_user', id=user[0]) }}" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="disable-btn">Disable</button>
+              </form>
+            {% endif %}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

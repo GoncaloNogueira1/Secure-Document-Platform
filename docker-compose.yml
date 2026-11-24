@@ -1,0 +1,327 @@
+x-fluentbit-logging: &fluentbit-logging
+  driver: fluentd
+  options:
+    fluentd-address: "127.0.0.1:24224"
+    tag: "docker.{{.Name}}"
+    fluentd-async: "true"
+    fluentd-sub-second-precision: "true"
+x-proxy-logging: &proxy-logging
+  driver: fluentd
+  options:
+    fluentd-address: "127.0.0.1:24224"
+    tag: "proxy.{{.Name}}"
+    fluentd-async: "true"
+    fluentd-sub-second-precision: "true"
+x-app-logging: &app-logging
+  driver: fluentd
+  options:
+    fluentd-address: "127.0.0.1:24224"
+    tag: "app.{{.Name}}"
+    fluentd-async: "true"
+    fluentd-sub-second-precision: "true"
+x-analyzer-logging: &analyzer-logging
+  driver: fluentd
+  options:
+    fluentd-address: "127.0.0.1:24224"
+    tag: "analyzer.{{.Name}}"
+    fluentd-async: "true"
+    fluentd-sub-second-precision: "true"
+services:
+  web:
+    build: ./web
+    env_file:
+      - .env
+    volumes:
+      - ./web:/app
+      - docdata:/data
+    depends_on:
+      - db
+    restart: unless-stopped
+    networks:
+      - app_net
+    logging: *app-logging
+
+  document-storage:
+    image: alpine:3.22
+    command: ["sh", "-c", "mkdir -p /data/staging /data/storage && sleep infinity"]
+    volumes:
+      - docdata:/data
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  clamd:
+    image: clamav/clamav:stable
+    volumes:
+      - clamdb:/var/lib/clamav
+    restart: unless-stopped
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'PING\\n' | nc -w 2 127.0.0.1 3310 | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
+
+  document-analyzer:
+    build: ./document-analyzer
+    environment:
+      CLAMD_HOST: clamd
+      CLAMD_PORT: "3310"
+      DATA_ROOT: /data
+      ANALYZER_LOG_LEVEL: INFO
+      LOG_CLAM_RAW_RESPONSE: "false"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - docdata:/data:ro
+    depends_on:
+      clamd:
+        condition: service_healthy
+      document-storage:
+        condition: service_started
+    networks:
+      - app_net
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    logging: *analyzer-logging
+
+  proxy1:
+    image: nginx:1.27-alpine
+    attach: false
+    depends_on:
+      - web
+    volumes:
+      - ./infra/proxies/proxy1.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/proxy1:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+    logging: *proxy-logging
+
+  proxy2:
+    image: nginx:1.27-alpine
+    attach: false
+    depends_on:
+      - web
+    volumes:
+      - ./infra/proxies/proxy2.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/proxy2:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+    logging: *proxy-logging
+
+  lb_active:
+    image: nginx:1.27-alpine
+    attach: false
+    depends_on:
+      - proxy1
+      - proxy2
+    volumes:
+      - ./infra/lb/lb-active.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/lb:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+    logging: *proxy-logging
+
+  lb_inactive:
+    image: nginx:1.27-alpine
+    attach: false
+    depends_on:
+      - proxy1
+      - proxy2
+    volumes:
+      - ./infra/lb/lb-inactive.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/lb:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+    logging: *proxy-logging
+
+  lb_entrypoint:
+    image: nginx:1.27-alpine
+    attach: false
+    depends_on:
+      - lb_active
+      - lb_inactive
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./infra/lb/lb-entrypoint.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/lb:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+    logging: *proxy-logging
+
+  db:
+    build: ./db
+    attach: false
+    env_file:
+      - .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - app_net
+    logging: *fluentbit-logging
+    
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.0
+    # To not print output in the terminal
+    attach: false
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+
+      # HTTP API TLS: https://elasticsearch:9200
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=certs/elasticsearch.key
+      - xpack.security.http.ssl.certificate=certs/elasticsearch.crt
+      - xpack.security.http.ssl.certificate_authorities=certs/ca.crt
+
+      # Internal transport TLS
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=certs/elasticsearch.key
+      - xpack.security.transport.ssl.certificate=certs/elasticsearch.crt
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca.crt
+      - xpack.security.transport.ssl.verification_mode=certificate
+
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+      - ./infra/certs/elastic:/usr/share/elasticsearch/config/certs:ro
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --cacert /usr/share/elasticsearch/config/certs/ca.crt -u elastic:$$ELASTIC_PASSWORD https://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  elasticsearch-setup:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
+    volumes:
+      - ./infra/certs/elastic/ca.crt:/certs/ca.crt:ro
+    networks:
+      - app_net
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        curl -fsS
+        --cacert /certs/ca.crt
+        -u elastic:$$ELASTIC_PASSWORD
+        -H "Content-Type: application/json"
+        -X POST
+        https://elasticsearch:9200/_security/user/kibana_system/_password
+        -d "{\"password\":\"$$KIBANA_SYSTEM_PASSWORD\"}"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.4.0
+    attach: false
+    depends_on:
+      elasticsearch-setup:
+        condition: service_completed_successfully
+    environment:
+      ELASTICSEARCH_HOSTS: '["https://elasticsearch:9200"]'
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: ${KIBANA_SYSTEM_PASSWORD}
+      ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES: /usr/share/kibana/config/certs/ca.crt
+
+      SERVER_SSL_ENABLED: "true"
+      SERVER_SSL_CERTIFICATE: /usr/share/kibana/config/certs/kibana.crt
+      SERVER_SSL_KEY: /usr/share/kibana/config/certs/kibana.key
+    volumes:
+      - ./infra/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - ./infra/certs/elastic:/usr/share/kibana/config/certs:ro
+    ports:
+      - "5601:5601"
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --cacert /usr/share/kibana/config/certs/ca.crt https://localhost:5601/login >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  kibana-saved-objects-import:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      kibana:
+        condition: service_healthy
+    environment:
+      KIBANA_URL: https://kibana:5601
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+    volumes:
+      - ./infra/kibana/saved_objects:/saved_objects:ro
+      - ./infra/kibana/import_saved_objects.sh:/import_saved_objects.sh:ro
+      - ./infra/certs/elastic/ca.crt:/certs/ca.crt:ro
+    networks:
+      - app_net
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - tr -d '\r' < /import_saved_objects.sh | /bin/sh
+
+
+  fluent-bit:
+    image: cr.fluentbit.io/fluent/fluent-bit:4.2.3
+    attach: false
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+    command: ["-c", "/fluent-bit/etc/fluent-bit.yaml"]
+    ports:
+      - "127.0.0.1:24224:24224"
+    volumes:
+      - ./infra/fluent-bit/fluent-bit.yaml:/fluent-bit/etc/fluent-bit.yaml:ro
+      - ./infra/certs/elastic/ca.crt:/fluent-bit/certs/ca.crt:ro
+    networks:
+      - app_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+  esdata:
+  docdata:
+  clamdb:
+
+networks:
+  app_net:
+  

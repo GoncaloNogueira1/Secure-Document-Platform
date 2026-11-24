@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-intro">
+  <p id="title-preview" class="muted"></p>
+</div>
+<section class="grid">
+  <div class="card">
+    <h2>Upload document</h2>
+    <form method="post" action="{{ url_for('upload_document') }}" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Title</label>
+      <input type="text" name="title" required>
+
+      <label>File</label>
+      <input type="file" name="document" required id="document-input" accept="application/pdf,.pdf">
+      <small style="color: #666;">Max file size: 10 MB</small>
+      <div id="file-error" style="color: red; margin-top: 8px; display: none;"></div>
+
+      <button type="submit" id="upload-btn">Upload</button>
+    </form>
+  </div>
+
+  <div class="documents-stack">
+    <section class="card document-panel">
+      <div class="section-header">
+        <div>
+          <h2>Documents</h2>
+          <p class="section-note">Your uploaded files and the actions available on each one.</p>
+        </div>
+        <span class="section-badge">{{ documents|length }} items</span>
+      </div>
+
+      {% if documents %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Filename</th>
+              <th>Summary</th>
+              <th>Full</th>
+              <th>Download</th>
+              <th>Share</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for doc in documents %}
+            <tr>
+              <td>{{ doc.id }}</td>
+              <td>{{ doc.title }}</td>
+              <td>{{ doc.original_filename or doc.filename }}</td>
+              <td>
+                <button class="details-btn" data-title="{{ doc.title }}">
+                  Summary
+                </button>
+              </td>
+              <td>
+                <a href="{{ url_for('document_details', document_id=doc.id) }}">
+                  Details
+                </a>
+              </td>
+              <td>
+                <a href="{{ url_for('download_document', document_id=doc.id) }}">
+                  Download
+                </a>
+              </td>
+              <td>
+                <a href="{{ url_for('share_document', doc_id=doc.id) }}">
+                  Share
+                </a>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="aux-panels">
+        <div id="doc-details" class="card aux-card" style="display:none;">
+          <h3>Document details</h3>
+          <p id="doc-title"></p>
+        </div>
+        <div id="share-document" class="card aux-card" style="display:none;">
+          <h3>Share document with another user</h3>
+        </div>
+      </div>
+      {% else %}
+        <p class="empty-state">No documents found yet.</p>
+      {% endif %}
+    </section>
+
+    <section class="card document-panel shared-panel">
+      <div class="section-header">
+        <div>
+          <h2>Shared with me</h2>
+          <p class="section-note">Documents other users shared with your account.</p>
+        </div>
+        <span class="section-badge">{{ shared_documents|length }} items</span>
+      </div>
+
+      {% if shared_documents %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Filename</th>
+              <th>Shared By</th>
+              <th>Summary</th>
+              <th>Full</th>
+              <th>Download</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for doc in shared_documents %}
+            <tr>
+              <td>{{ doc.id }}</td>
+              <td>{{ doc.title }}</td>
+              <td>{{ doc.original_filename or doc.filename }}</td>
+              <td>{{ doc.owner_username }}</td>
+              <td>
+                <button class="details-btn" data-title="{{ doc.title }}">
+                  Summary
+                </button>
+              </td>
+              <td>
+                <a href="{{ url_for('document_details', document_id=doc.id) }}">
+                  Details
+                </a>
+              </td>
+              <td>
+                <a href="{{ url_for('download_shared_document', document_id=doc.id) }}">
+                  Download
+                </a>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <p class="empty-state">No documents shared with you.</p>
+      {% endif %}
+    </section>
+  </div>
+</section>
+{% endblock %}

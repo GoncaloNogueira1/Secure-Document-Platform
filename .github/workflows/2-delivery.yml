@@ -1,0 +1,203 @@
+name: 2 - Continuous Delivery
+run-name: "${{ github.workflow }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag to validate (e.g., commit SHA)"
+        required: true
+  workflow_run:
+    workflows: ["1 - Continuous Integration"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+  WEB_IMAGE_NAME: secure-doc-platform-web
+  DB_IMAGE_NAME: secure-doc-platform-db
+
+jobs:
+  deliver:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set lowercase image namespace
+        run: |
+          echo "IMAGE_NAMESPACE_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Resolve image tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "IMAGE_TAG=${{ github.event.inputs.image_tag }}" >> "$GITHUB_ENV"
+          else
+            echo "IMAGE_TAG=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Export deployment image references
+        run: |
+          echo "WEB_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE_LC }}/${{ env.WEB_IMAGE_NAME }}:${IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "DB_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE_LC }}/${{ env.DB_IMAGE_NAME }}:${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Pull deliverable images
+        run: |
+          docker pull "$WEB_IMAGE"
+          docker pull "$DB_IMAGE"
+
+      - name: Create .env for delivery
+        run: |
+          printf '%s\n' \
+            'SECRET_KEY=test-secret-key-for-ci-testing-only-never-in-prod' \
+            'POSTGRES_PASSWORD=postgres' \
+            'POSTGRES_DB=docdb' \
+            'POSTGRES_USER=postgres' \
+            'APP_USER_PASSWORD=testappuser' \
+            'APP_ADMIN_PASSWORD=testadminuser' \
+            'DB_HOST=db' \
+            'DB_PORT=5432' \
+            'APP_USER=app_user' \
+            'APP_ADMIN=app_admin' \
+            'CLAMD_HOST=clamd' \
+            'CLAMD_PORT=3310' \
+            'DOCUMENT_ANALYZER_URL=http://document-analyzer:9000/analyze' \
+            'FLASK_DEBUG=false' \
+            'SESSION_COOKIE_SECURE=true' \
+            'SESSION_TIMEOUT_MINUTES=10' \
+            'ANALYZER_LOG_LEVEL=INFO' \
+            'LOG_CLAM_RAW_RESPONSE=false' \
+            > .env
+
+      - name: Create deploy compose override for delivery
+        run: |
+          printf '%s\n' \
+            'services:' \
+            '  web:' \
+            '    env_file: []' \
+            '    environment:' \
+            '      SECRET_KEY: test-secret-key-for-ci-testing-only-never-in-prod' \
+            '      CLAMD_HOST: clamd' \
+            '      CLAMD_PORT: "3310"' \
+            '      DOCUMENT_ANALYZER_URL: http://document-analyzer:9000/analyze' \
+            '      FLASK_DEBUG: "false"' \
+            '      SESSION_COOKIE_SECURE: "true"' \
+            '      SESSION_TIMEOUT_MINUTES: "10"' \
+            '      ANALYZER_LOG_LEVEL: INFO' \
+            '      LOG_CLAM_RAW_RESPONSE: "false"' \
+            '  db:' \
+            '    env_file: []' \
+            '    environment:' \
+            '      POSTGRES_PASSWORD: postgres' \
+            '      POSTGRES_DB: docdb' \
+            '      POSTGRES_USER: postgres' \
+            '      APP_USER: app_user' \
+            '      APP_ADMIN: app_admin' \
+            '      DB_PORT: "5432"' \
+            > docker-compose.deploy.override.yml
+
+      - name: Start delivery environment
+        env:
+          WEB_IMAGE: ${{ env.WEB_IMAGE }}
+          DB_IMAGE: ${{ env.DB_IMAGE }}
+        run: |
+          docker compose -f docker-compose.deploy.yml -f docker-compose.deploy.override.yml up -d
+
+      - name: Wait for application
+        run: |
+          timeout=120
+          elapsed=0
+
+          echo "Container status:"
+          docker compose -f docker-compose.deploy.yml -f docker-compose.deploy.override.yml ps
+
+          until curl -kfs https://localhost:8433/health > /dev/null 2>&1; do
+            if [ "$elapsed" -ge "$timeout" ]; then
+              echo "Application did not become ready within ${timeout}s"
+              echo ""
+              echo "Container logs:"
+              docker compose -f docker-compose.deploy.yml -f docker-compose.deploy.override.yml logs
+              exit 1
+            fi
+
+            echo "Waiting for application... (${elapsed}s elapsed)"
+            sleep 2
+            elapsed=$((elapsed+2))
+          done
+
+          echo "Application is ready"
+
+      - name: Verify application health
+        run: |
+          curl -kf https://localhost:8433/health
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest requests
+
+      - name: Run delivery tests
+        env:
+          APP_BASE_URL: https://localhost:8433
+        run: |
+          pytest -q tests/test_delivery_auth_flow.py tests/test_delivery_security.py
+
+      - name: OWASP ZAP baseline
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          target: "https://localhost:8433"
+          allow_issue_writing: false
+          fail_action: true
+          rules_file_name: .zap/rules.tsv
+          cmd_options: '-a -j -z "-config connection.sslTls.acceptAllCertificates=true"'
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-${{ env.IMAGE_TAG }}
+          path: |
+            report_html.html
+            report_json.json
+          if-no-files-found: warn
+
+      - name: Promote validated images to dev
+        if: success()
+        run: |
+          docker tag "$WEB_IMAGE" "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE_LC }}/${{ env.WEB_IMAGE_NAME }}:dev"
+          docker tag "$DB_IMAGE" "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE_LC }}/${{ env.DB_IMAGE_NAME }}:dev"
+
+          docker push "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE_LC }}/${{ env.WEB_IMAGE_NAME }}:dev"
+          docker push "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE_LC }}/${{ env.DB_IMAGE_NAME }}:dev"
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.deploy.yml -f docker-compose.deploy.override.yml logs
+
+      - name: Stop delivery environment
+        if: always()
+        run: |
+          docker compose -f docker-compose.deploy.yml -f docker-compose.deploy.override.yml down -v --remove-orphans

@@ -1,0 +1,103 @@
+service:
+  flush: 1
+  log_level: info
+
+parsers:
+  - name: json_parser
+    format: json
+
+pipeline:
+  inputs:
+    - name: forward
+      listen: 0.0.0.0
+      port: 24224
+
+  filters:
+     # Parse JSON logs (handles auth, app logs)
+    - name: parser
+      match: "app.*"
+      key_name: log
+      parser: json_parser
+      reserve_data: on
+      preserve_key: off
+
+    # Parse nginx JSON logs
+    - name: parser
+      match: "proxy.*"
+      key_name: log
+      parser: json_parser
+      reserve_data: on
+      preserve_key: off
+
+    # Parse nginx JSON logs
+    - name: parser
+      match: "analyzer.*"
+      key_name: log
+      parser: json_parser
+      reserve_data: on
+      preserve_key: off
+
+  outputs:
+  - name: es
+    match: "app.*"
+    host: elasticsearch
+    port: 9200
+    tls: on
+    tls.verify: on
+    tls.ca_file: /fluent-bit/certs/ca.crt
+    http_user: elastic
+    http_passwd: ${ELASTIC_PASSWORD}
+    logstash_format: on
+    logstash_prefix: app-logs
+    suppress_type_name: on
+    generate_id: on
+    include_tag_key: on
+    tag_key: fluent_tag
+
+  - name: es
+    match: "proxy.*"
+    host: elasticsearch
+    port: 9200
+    tls: on
+    tls.verify: on
+    tls.ca_file: /fluent-bit/certs/ca.crt
+    http_user: elastic
+    http_passwd: ${ELASTIC_PASSWORD}
+    logstash_format: on
+    logstash_prefix: proxy-logs
+    suppress_type_name: on
+    generate_id: on
+    include_tag_key: on
+    tag_key: fluent_tag
+
+  - name: es
+    match: "docker.*"
+    host: elasticsearch
+    port: 9200
+    tls: on
+    tls.verify: on
+    tls.ca_file: /fluent-bit/certs/ca.crt
+    http_user: elastic
+    http_passwd: ${ELASTIC_PASSWORD}
+    logstash_format: on
+    logstash_prefix: docker-logs
+    suppress_type_name: on
+    generate_id: on
+    include_tag_key: on
+    tag_key: fluent_tag
+  
+  - name: es
+    match: "analyzer.*"
+    host: elasticsearch
+    port: 9200
+    tls: on
+    tls.verify: on
+    tls.ca_file: /fluent-bit/certs/ca.crt
+    http_user: elastic
+    http_passwd: ${ELASTIC_PASSWORD}
+    logstash_format: on
+    logstash_prefix: analyzer-logs
+    suppress_type_name: on
+    generate_id: on
+    include_tag_key: on
+    tag_key: fluent_tag

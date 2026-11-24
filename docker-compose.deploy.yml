@@ -1,0 +1,88 @@
+services:
+  web:
+    image: ${WEB_IMAGE}
+    env_file:
+      - .env
+    depends_on:
+      - db
+    # web only listens internally on 8000; do not publish the same host port
+    # The load-balancer (`lb_entrypoint`) will expose the service on the host.
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  proxy1:
+    image: nginx:1.27-alpine
+    depends_on:
+      - web
+    volumes:
+      - ./infra/proxies/proxy1.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/proxy1:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  proxy2:
+    image: nginx:1.27-alpine
+    depends_on:
+      - web
+    volumes:
+      - ./infra/proxies/proxy2.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/proxy2:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  lb_active:
+    image: nginx:1.27-alpine
+    depends_on:
+      - proxy1
+      - proxy2
+    volumes:
+      - ./infra/lb/lb-active.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/lb:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  lb_inactive:
+    image: nginx:1.27-alpine
+    depends_on:
+      - proxy1
+      - proxy2
+    volumes:
+      - ./infra/lb/lb-inactive.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/lb:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  lb_entrypoint:
+    image: nginx:1.27-alpine
+    depends_on:
+      - lb_active
+      - lb_inactive
+    ports:
+      - "8433:8443"
+    volumes:
+      - ./infra/lb/lb-entrypoint.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/certs/lb:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  db:
+    image: ${DB_IMAGE}
+    env_file:
+      - .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - app_net
+
+volumes:
+  pgdata:
+
+networks:
+  app_net:
